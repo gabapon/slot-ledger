@@ -37,6 +37,7 @@
   --chip:#29303B; --chip-on:#20374F; --sel:#1C2C40; --warn:#FFD27A; --warn-bg:#3A2F14; color-scheme:dark;
 }
 *,*::before,*::after{box-sizing:inherit}
+details *,details *::before,details *::after,input,select,textarea{box-sizing:border-box}
 html{height:100%;scroll-padding-top:env(safe-area-inset-top,0px)}
 body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);font-family:var(--ui);font-size:16px;line-height:1.5;-webkit-tap-highlight-color:transparent;font-variant-numeric:tabular-nums}
 button,input,select,textarea{font:inherit;color:inherit}
@@ -185,6 +186,14 @@ details.med[open]>summary::after{content:"閉じる"}
 .store .nm{font-weight:700;display:flex;justify-content:space-between;gap:8px;align-items:center}
 .store .inline{margin-top:8px}
 .small{font-size:13px;color:var(--sub)}
+.medcard{display:flex;justify-content:space-between;align-items:center;gap:10px;width:calc(100% - 20px);margin:10px 10px 0;background:var(--card);border:0;border-radius:14px;padding:12px 14px;text-align:left}
+.medcard>span:first-child{display:flex;flex-direction:column;flex:none}
+.medcard b{font-size:18px}
+.medcard .small{text-align:right;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.mhist{margin-top:8px;border-top:1px solid var(--line);padding-top:6px}
+.mrow{display:grid;grid-template-columns:auto 1fr auto;gap:8px;font-size:13px;color:var(--sub);padding:2px 0}
+.mrow span:nth-child(2){text-align:right}
+.store .nm b{font-size:17px}
 .stack{display:flex;flex-direction:column;gap:10px}
 </style>
 </head>
@@ -259,7 +268,8 @@ const yen500=(medals,rate)=>medals>0?Math.floor(medals*100/(+rate||5.6)/500)*500
 const hasMed=e=>!!(+e.mStart||+e.mEnd||+e.mSave);
 function calc(e){
   const r=+e.rate||5.6;
-  const ex=e.payMode==='medal'?yen500(+e.exMedals||0,r):(+e.exYen||0);
+  const exM=Math.max(0,(+e.exBefore||0)-(+e.exAfter||0));
+  const ex=+e.exYen?+e.exYen:e.payMode==='medal'?yen500(+e.exMedals||0,r):yen500(exM,r);
   let med=0,before=0,after=0;
   if(hasMed(e)){before=+e.mStart||0;after=(+e.mEnd||0)+(+e.mSave||0);med=yen500(after,r)-yen500(before,r)}
   const inv=(+e.invest||0)+Math.max(0,-med);
@@ -290,14 +300,15 @@ const uw=()=>S.prefs.winUnit==='day'?'日':'回';
 const pct=v=>v==null?'—':v.toFixed(1)+'%';
 function storeNames(){
   const last=new Map();S.entries.forEach(e=>{if(e.store&&(!last.has(e.store)||e.date>last.get(e.store)))last.set(e.store,e.date)});
-  return S.prefs.stores.map(s=>s.name).sort((a,b)=>(last.get(b)||'').localeCompare(last.get(a)||''));
+  const k=st=>[last.get(st.name)||'',st.balAt||'',st.addedAt||''].sort().pop();
+  return S.prefs.stores.slice().sort((a,b)=>k(b).localeCompare(k(a))).map(s=>s.name);
 }
 
 /* ---------- 画面 ---------- */
 function render(){
   document.querySelectorAll('.nav button').forEach(b=>{const on=b.dataset.tab===S.tab;b.classList.toggle('on',on);b.setAttribute('aria-current',on?'page':'false')});
-  $('#app').innerHTML=S.tab==='cal'?viewCal():S.tab==='hist'?viewHist():S.tab==='ana'?viewAna():viewSet();
-  $('#fab').style.display=S.tab==='set'?'none':'';
+  $('#app').innerHTML=S.tab==='med'?viewMed():S.tab==='cal'?viewCal():S.tab==='hist'?viewHist():S.tab==='ana'?viewAna():viewSet();
+  $('#fab').style.display=(S.tab==='set'||S.tab==='med')?'none':'';
 }
 const totalHTML=v=>`<div class="total ${cls(v)}">${sgn(v)}<small>円</small></div>`;
 function summaryHTML(label,s){
@@ -315,9 +326,37 @@ function viewCal(){
   const dl=sorted().filter(e=>e.date===S.sel),dnet=dl.reduce((a,e)=>a+calc(e).net,0),sd=new Date(S.sel+'T00:00');
   return `<header class="bar"><button class="iconbtn" data-act="prev" aria-label="前の月">‹</button><h1>${y}年${mo+1}月</h1><button class="iconbtn" data-act="next" aria-label="次の月">›</button></header>
   ${summaryHTML(`${mo+1}月の収支`,summarize(mList))}
+  ${medCard()}
   <section class="cal" id="cal"><div class="wk">${WD.map(w=>`<span>${w}</span>`).join('')}</div><div class="grid">${cells}</div></section>
   <div class="dayhead"><h2>${sd.getMonth()+1}月${sd.getDate()}日（${WD[sd.getDay()]}）</h2>${dl.length?`<b class="${cls(dnet)}">${sgn(dnet)}</b>`:''}</div>
   <div class="list">${dl.length?dl.map(e=>entryHTML(e)).join(''):`<div class="empty">この日の記録はありません<br><button class="btn primary small" data-act="add">この日に記録する</button></div>`}</div>`;
+}
+function medTotals(){
+  const list=S.prefs.stores.filter(s=>+s.bal>0);
+  return{list,yen:list.reduce((a,s)=>a+yen500(+s.bal,s.rate),0)};
+}
+function medCard(){
+  const t=medTotals();
+  return `<button class="medcard" data-act="med"><span><span class="tlabel">貯メダル残高（${t.list.length}店舗）</span><b>${fmt(t.yen)}円分</b></span><span class="small">${t.list.slice(0,2).map(s=>esc(s.name)+' '+fmt(s.bal)+'枚').join('・')}${t.list.length>2?' ほか':''} ›</span></button>`;
+}
+function viewMed(){
+  const t=medTotals(),all=storeNames().map(storeOf);
+  const has=all.filter(s=>+s.bal>0).sort((a,b)=>yen500(+b.bal,b.rate)-yen500(+a.bal,a.rate)),zero=all.filter(s=>!(+s.bal>0));
+  const card=s=>{
+    const hist=sorted().filter(e=>e.store===s.name&&hasMed(e)).reverse().slice(0,5).map(e=>{const c=calc(e),d=new Date(e.date+'T00:00'),diff=c.after-c.before;
+      return `<div class="mrow"><span>${d.getMonth()+1}/${d.getDate()}（${WD[d.getDay()]}）</span><span>${fmt(c.before)}→${fmt(c.after)}枚</span><b class="${cls(diff)}">${diff>0?'+':diff<0?'−':'±'}${fmt(Math.abs(diff))}</b></div>`}).join('');
+    const y=yen500(+s.bal||0,s.rate),rest=Math.round(((+s.bal||0)*100/s.rate-y));
+    return `<div class="store"><div class="nm"><span>${esc(s.name)}</span><b>${fmt(s.bal||0)}枚</b></div>
+      <div class="small">${fmt(y)}円分（${s.rate}枚交換）${rest>0&&+s.bal?`・あと${fmt(Math.ceil((500-rest)*s.rate/100))}枚で+500円`:''}${s.balAt?`・最終 ${+s.balAt.slice(5,7)}/${+s.balAt.slice(8)}`:''}</div>
+      ${hist?`<div class="mhist">${hist}</div>`:''}
+      <div class="inline"><label class="small" for="mb-${esc(s.name)}">残高を修正</label><input type="text" inputmode="numeric" id="mb-${esc(s.name)}" data-sbal="${esc(s.name)}" value="${fmt(s.bal||0)}"><span>枚</span></div></div>`;
+  };
+  return `<header class="bar"><button class="iconbtn" data-act="back" aria-label="戻る">‹</button><h1>貯メダル残高</h1><span style="width:48px"></span></header>
+  <div class="summary"><div class="tlabel">${has.length}店舗の合計（500円単位）</div><div class="total">${fmt(t.yen)}<small>円分</small></div>
+    <div class="small" style="margin-top:4px">${fmt(has.reduce((a,s)=>a+(+s.bal),0))}枚</div></div>
+  <div class="section">${has.length?has.map(card).join(''):'<div class="panel small">貯メダルが残っている店舗はありません。</div>'}</div>
+  ${zero.length?`<div class="section"><details><summary class="shead" style="cursor:pointer">残高0の店舗（${zero.length}）</summary>${zero.map(card).join('')}</details></div>`:''}
+  <p class="note" style="padding:8px 16px">残高は記録を保存するたびに自動で更新されます。カードの店員さんの表示と違うときは「残高を修正」で直してください。</p>`;
 }
 function entryHTML(e,showDate){
   const c=calc(e),parts=[];
@@ -413,6 +452,7 @@ function breakdown(list){
 function viewSet(){
   const lb=S.prefs.lastBackup;
   return `<header class="bar"><span style="width:48px"></span><h1>設定</h1><span style="width:48px"></span></header>
+  <div class="section"><button class="btn" data-act="med" style="width:100%">貯メダル残高を見る</button></div>
   <div class="section"><div class="shead">店舗（交換率と貯メダル残高を記憶）</div>
     ${S.prefs.stores.length?storeNames().map(n=>{const s=storeOf(n);return `<div class="store"><div class="nm"><span>${esc(n)}</span><button class="btn danger small" data-delstore="${esc(n)}">削除</button></div>
       <div class="inline"><input type="text" inputmode="decimal" data-srate="${esc(n)}" value="${esc(s.rate)}" aria-label="${esc(n)}の交換率"><span>枚交換</span>
@@ -442,11 +482,12 @@ let F=null;
 function blank(date){
   const store=(sorted().filter(x=>x.date===date).pop()||{}).store||'';
   const st=storeOf(store);
-  return{v:3,id:uid(),date,store,invest:0,payMode:'yen',exYen:0,exMedals:0,mStart:st?+st.bal||0:0,mEnd:st?+st.bal||0:0,mSave:0,
+  return{v:3,id:uid(),date,store,invest:0,payMode:'yen',exYen:0,exMedals:0,exBefore:0,exAfter:0,mStart:st?+st.bal||0:0,mEnd:st?+st.bal||0:0,mSave:0,
     rate:st?+st.rate:S.prefs.rate,memo:'',createdAt:Date.now(),_new:true,_rateNew:S.prefs.rate};
 }
 function openSheet(e){
-  F=e?Object.assign(JSON.parse(JSON.stringify(e)),{_new:false}):blank(S.tab==='cal'?S.sel:ymd(new Date()));
+  F=e?Object.assign(JSON.parse(JSON.stringify(e)),{_new:false,_saveTouched:true}):blank(S.tab==='cal'?S.sel:ymd(new Date()));
+  if(F.payMode==='medal'){F.exBefore=+F.exMedals||0;F.exAfter=0;F.exMedals=0;F.payMode='yen'}
   if(!e&&!hasMed(F)){F.mStart=F.mEnd=(storeOf(F.store)||{}).bal||0}
   drawSheet();$('#sheet').classList.add('open');document.body.style.overflow='hidden';$('#sheet').scrollTop=0;
   if(!e)setTimeout(()=>{const i=$('#fInv');if(i)i.focus()},60);
@@ -461,9 +502,17 @@ function drawSheet(){
   <div class="live"><div id="fTotal">${totalHTML(c.net)}</div><div class="tlabel" id="fSub">${subLine(c)}</div></div>
   <div class="f"><div class="row2">
     <div><div class="flabel"><label for="fInv">投資</label></div><div class="unitin">${numIn('fInv',F.invest)}<i>円</i></div></div>
-    <div><div class="flabel"><label for="${F.payMode==='yen'?'fEx':'fExM'}">回収</label><div class="toggle" role="group" aria-label="回収の単位"><button type="button" data-pm="yen" class="${F.payMode==='yen'?'on':''}">円</button><button type="button" data-pm="medal" class="${F.payMode==='medal'?'on':''}">枚</button></div></div>
-      <div class="unitin">${F.payMode==='yen'?numIn('fEx',F.exYen):numIn('fExM',F.exMedals)}<i>${F.payMode==='yen'?'円':'枚'}</i></div><div class="calc" id="cEx">${exNote()}</div></div>
-  </div></div>
+    <div><div class="flabel"><label for="fEx">回収</label></div>
+      <div class="unitin">${numIn('fEx',F.exYen)}<i>円</i></div><div class="calc" id="cEx">${exNote()}</div></div>
+  </div>
+  <details class="med" id="exBox" style="margin-top:10px"${(+F.exBefore||+F.exAfter||(F.payMode==='medal'&&+F.exMedals))?' open':''}><summary>交換した枚数（交換率チェック）</summary>
+    <div class="row2" style="margin-top:10px">
+      <div><div class="flabel"><label for="fXB">交換前の枚数</label></div><div class="unitin">${numIn('fXB',F.exBefore||(F.payMode==='medal'?F.exMedals:0))}<i>枚</i></div></div>
+      <div><div class="flabel"><label for="fXA">交換後の残り</label></div><div class="unitin">${numIn('fXA',F.exAfter)}<i>枚</i></div></div>
+    </div>
+    <div class="hint">レシートの交換前・交換後の枚数を入れると、受け取った金額から実際の交換率を確かめます。金額が空欄なら、枚数から金額を計算します。</div>
+    <div id="exRes">${exRes()}</div>
+  </details></div>
   <div class="f"><div class="flabel"><label for="fDate">日付</label></div><input type="date" id="fDate" value="${esc(F.date)}"></div>
   <div class="f"><div class="flabel"><label for="fStore">店舗</label></div>
     <input type="text" id="fStore" value="${esc(F.store)}" placeholder="店舗名（新しい店もそのまま入力）" autocomplete="off">
@@ -487,9 +536,32 @@ function drawSheet(){
 }
 function subLine(c){return `投資 ${fmt(c.inv)}円<br>回収 ${fmt(c.ret)}円`}
 function exNote(){
-  if(F.payMode!=='medal'||!+F.exMedals)return '';
-  const r=+F.rate||5.6,y=yen500(F.exMedals,r),rest=Math.round(F.exMedals-y*r/100);
-  return `= ${fmt(y)}円${rest>0?`（端数${fmt(rest)}枚は切り捨て）`:''}`;
+  const m=Math.max(0,(+F.exBefore||0)-(+F.exAfter||0));
+  if(+F.exYen||!m)return '';
+  const r=+F.rate||5.6,y=yen500(m,r),rest=Math.round(m-y*r/100);
+  return `枚数から計算：${fmt(y)}円${rest>0?`（端数${fmt(rest)}枚は切り捨て）`:''}`;
+}
+/* 実際の交換率 = 交換した枚数 ÷ (受け取った金額 ÷ 100) */
+const COMMON=[4.6,5,5.1,5.2,5.3,5.4,5.5,5.6,5.7,5.8,5.9,6,6.1,6.2,6.3,6.4,6.5,7];
+function realRate(){
+  const m=(+F.exBefore||0)-(+F.exAfter||0),y=+F.exYen||0;
+  if(m<=0||y<500)return null;
+  const raw=m*100/y;
+  const near=COMMON.reduce((a,b)=>Math.abs(b-raw)<Math.abs(a-raw)?b:a);
+  return Math.abs(near-raw)/raw<0.02?near:Math.round(raw*100)/100;
+}
+function exRes(){
+  const m=(+F.exBefore||0)-(+F.exAfter||0);
+  if(!(+F.exBefore||+F.exAfter))return '';
+  if(m<0)return '<div class="warnline">交換後の残りが交換前より多くなっています。</div>';
+  let h=`<div class="medres"><div><span>交換した枚数</span><b>${fmt(m)}枚</b></div>`;
+  const rr=realRate();
+  if(rr){h+=`<div><span>実際の交換率</span><b>${rr}枚交換</b></div>`}
+  h+='</div>';
+  if(rr&&Math.abs(rr-(+F.rate||0))>0.001)h+=`<div class="warnline">登録の交換率（${esc(F.rate)}枚）と違います。<button type="button" class="btn small primary" data-fixrate="${rr}" style="margin-top:6px;display:block">${rr}枚交換に修正する</button></div>`;
+  else if(rr)h+='<div class="hint">登録の交換率と一致しています。</div>';
+  if(+F.exAfter>0&&!F._saveTouched)h+=`<div class="hint">交換後の残り${fmt(F.exAfter)}枚は、貯メダルに預けた枚数として入れてあります（下の貯メダル欄で変更できます）。</div>`;
+  return h;
 }
 function storeInfo(){
   return `<div class="newstore" id="newNote" ${F.store&&!storeOf(F.store)?'':'hidden'}><b>新しい店舗</b>：保存すると店舗に追加され、次回から交換率と貯メダル残高を自動で入れます。</div>
@@ -516,6 +588,7 @@ function updateLive(){
   $('#fTotal').innerHTML=totalHTML(c.net);$('#fSub').innerHTML=subLine(c);
   const ex=$('#cEx');if(ex)ex.textContent=exNote();
   const m=$('#medRes');if(m)m.innerHTML=medRes();
+  const x=$('#exRes');if(x)x.innerHTML=exRes();
 }
 function setStore(name,fromChip){
   F.store=name;
@@ -526,11 +599,14 @@ function setStore(name,fromChip){
   const sc=$('#storeChips');if(sc)sc.querySelectorAll('.chip').forEach(ch=>ch.classList.toggle('on',ch.dataset.store===name));
   refreshStoreInfo();updateLive();
 }
-const numF={fInv:'invest',fEx:'exYen',fExM:'exMedals',fMS0:'mStart',fME:'mEnd',fSave:'mSave'};
+const numF={fInv:'invest',fEx:'exYen',fXB:'exBefore',fXA:'exAfter',fMS0:'mStart',fME:'mEnd',fSave:'mSave'};
 const sh=$('#sheet');
 sh.addEventListener('input',ev=>{
   if(!F)return;const t=ev.target;
-  if(numF[t.id]){const v=digits(t.value);F[numF[t.id]]=v;const s=v?fmt(v):'';if(t.value!==s&&!ev.isComposing)t.value=s;updateLive()}
+  if(numF[t.id]){const v=digits(t.value);F[numF[t.id]]=v;const s=v?fmt(v):'';if(t.value!==s&&!ev.isComposing)t.value=s;
+    if(t.id==='fSave')F._saveTouched=true;
+    if(t.id==='fXA'&&!F._saveTouched){F.mSave=v;const sv=$('#fSave');if(sv)sv.value=v?fmt(v):'';if(v){const d=$('#sheet details.med:not(#exBox)');if(d)d.open=true}}
+    updateLive()}
   else if(t.id==='fRate'){const v=parseFloat(t.value);if(v>0){F.rate=v;if(!storeOf(F.store))F._rateNew=v;const b=$('#balNote');if(b)b.textContent=balNote();updateLive()}}
   else if(t.id==='fDate')F.date=t.value;
   else if(t.id==='fMemo')F.memo=t.value;
@@ -544,7 +620,7 @@ let armT;
 sh.addEventListener('click',ev=>{
   const b=ev.target.closest('button');if(!b||!F)return;
   if(b.dataset.store!==undefined){setStore(b.dataset.store,true);return}
-  if(b.dataset.pm){if(F.payMode!==b.dataset.pm){F.payMode=b.dataset.pm;const y=$('#sheet').scrollTop;drawSheet();$('#sheet').scrollTop=y}return}
+  if(b.dataset.fixrate){F.rate=+b.dataset.fixrate;if(!storeOf(F.store))F._rateNew=F.rate;const r=$('#fRate');if(r)r.value=F.rate;refreshStoreInfo();updateLive();toast(`交換率を${F.rate}枚にしました（保存で店舗にも反映）`);return}
   const a=b.dataset.act;
   if(a==='close')closeSheet();
   else if(a==='save')doSave();
@@ -557,16 +633,17 @@ function doSave(){
   const fs=$('#fStore');if(fs&&fs.value.trim()!==F.store)setStore(fs.value.trim(),false);
   if(!F.date){toast('日付を入れてください');return}
   if((+F.mEnd||0)>(+F.mStart||0)){toast('貯メダルの残高を確認してください');return}
+  if((+F.exAfter||0)>(+F.exBefore||0)){toast('交換前・交換後の枚数を確認してください');return}
   const isNew=F._new,e=Object.assign({},F);delete e._new;delete e._rateNew;
   e.v=3;e.store=(e.store||'').trim();e.rate=+e.rate||S.prefs.rate;e.updatedAt=Date.now();
   if(+e.mStart===+e.mEnd&&!+e.mSave){e.mStart=0;e.mEnd=0;e.mSave=0}
-  if(e.payMode==='yen')e.exMedals=0;else e.exYen=0;
+  e.payMode='yen';e.exMedals=0;delete e._saveTouched;
   if(e.store){
     let st=storeOf(e.store);
-    if(!st){st={name:e.store,rate:e.rate,bal:0};S.prefs.stores.push(st)}
+    if(!st){st={name:e.store,rate:e.rate,bal:0,addedAt:ymd(new Date())};S.prefs.stores.push(st)}
     st.rate=e.rate;
     const later=S.entries.some(x=>x.id!==e.id&&x.store===e.store&&hasMed(x)&&x.date>e.date);
-    if(hasMed(e)&&!later)st.bal=(+e.mEnd||0)+(+e.mSave||0);
+    if(hasMed(e)&&!later){st.bal=(+e.mEnd||0)+(+e.mSave||0);st.balAt=e.date}
   }
   const i=S.entries.findIndex(x=>x.id===e.id);if(i>=0)S.entries[i]=e;else S.entries.push(e);
   save();
@@ -592,7 +669,9 @@ app.addEventListener('click',ev=>{
   const a=b.dataset.act;
   if(a==='prev'||a==='next')moveMonth(a==='prev'?-1:1);
   else if(a==='add')openSheet(null);
-  else if(a==='addStore'){const n=$('#newStore').value.trim(),r=parseFloat($('#newRate').value)||S.prefs.rate;if(!n){toast('店舗名を入れてください');return}if(storeOf(n)){toast('同じ名前の店舗があります');return}S.prefs.stores.push({name:n,rate:r,bal:0});save();render();toast('店舗を追加しました')}
+  else if(a==='med'){S.tab='med';render();window.scrollTo(0,0)}
+  else if(a==='back'){S.tab='cal';render();window.scrollTo(0,0)}
+  else if(a==='addStore'){const n=$('#newStore').value.trim(),r=parseFloat($('#newRate').value)||S.prefs.rate;if(!n){toast('店舗名を入れてください');return}if(storeOf(n)){toast('同じ名前の店舗があります');return}S.prefs.stores.push({name:n,rate:r,bal:0,addedAt:ymd(new Date())});save();render();toast('店舗を追加しました')}
   else if(a==='pick'){const f=$('#file');f.value='';f.click()}
   else if(a==='export')download('slot-ledger-'+ymd(new Date())+'.csv',toCSV(),false);
   else if(a==='backup')download('slot-ledger-backup-'+ymd(new Date())+'.json',JSON.stringify({app:'slot-ledger',version:3,prefs:S.prefs,entries:S.entries},null,1),true);
@@ -614,7 +693,7 @@ app.addEventListener('change',ev=>{
   else if(t.id==='to'){S.to=t.value;render()}
   else if(t.id==='rateDef'){const v=parseFloat(t.value);if(v>0){S.prefs.rate=v;save();toast('保存しました')}else t.value=S.prefs.rate}
   else if(t.dataset.srate!==undefined){const s=storeOf(t.dataset.srate),v=parseFloat(t.value);if(s&&v>0){s.rate=v;save();toast('交換率を保存しました')}else if(s)t.value=s.rate}
-  else if(t.dataset.sbal!==undefined){const s=storeOf(t.dataset.sbal);if(s){s.bal=digits(t.value);t.value=fmt(s.bal);save();toast('貯メダル残高を保存しました')}}
+  else if(t.dataset.sbal!==undefined){const s=storeOf(t.dataset.sbal);if(s){s.bal=digits(t.value);s.balAt=ymd(new Date());t.value=fmt(s.bal);save();render();toast('貯メダル残高を保存しました')}}
 });
 $('#file').addEventListener('change',async ev=>{const f=ev.target.files[0];if(!f)return;try{importText(await f.text())}catch(e){toast('ファイルを開けませんでした')}});
 
